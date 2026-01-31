@@ -7,7 +7,7 @@ project:
   tiles: "1x1"
   top_module:  "tt_um_nasser_hadi_moore_101"
   source_files:
-    - "tt_um_yourname_moore_101.v"
+    - "tt_um_nasser_hadi_moore_101.v"
 
 pinout:
   ui[0]: "din"
