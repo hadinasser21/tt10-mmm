@@ -1,50 +1,81 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, ClockCycles
+from cocotb.triggers import RisingEdge, Timer, ClockCycles
 
-def drive_din(dut, bit):
-    # Drive only ui_in[0]; keep other bits 0
+def set_din_only(dut, bit):
+    # Force all ui bits low except ui[0]
+    # This avoids accidentally leaving other bits as X/1.
     dut.ui_in.value = (bit & 1)
+
+def get_z(dut):
+    return int(dut.uo_out[0].value)
+
+def get_state_dbg(dut):
+    # uo_out[2:1] shows state (we wired it in Verilog)
+    # state[0] = uo_out[1], state[1] = uo_out[2]
+    s0 = int(dut.uo_out[1].value)
+    s1 = int(dut.uo_out[2].value)
+    return (s1 << 1) | s0
 
 @cocotb.test()
 async def test_project(dut):
-    dut._log.info("Start Moore 101 test")
+    dut._log.info("Start Moore 101 test (race-free)")
 
-    # Start clock (10 us period)
-    cocotb.start_soon(Clock(dut.clk, 10, units="us").start())
+    # 10us clock period
+    period_us = 10
+    cocotb.start_soon(Clock(dut.clk, period_us, units="us").start())
 
-    # Init
+    # Initialize
     dut.ena.value = 1
     dut.uio_in.value = 0
-    dut.ui_in.value = 0
+    set_din_only(dut, 0)
 
-    # Reset (active low)
+    # Apply reset (active-low)
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 2)
     dut.rst_n.value = 1
     await ClockCycles(dut.clk, 1)
 
-    # Moore-friendly step:
-    # 1) apply input before clock edge
-    # 2) wait for rising edge (state updates here)
-    # 3) sample output after the edge
-    async def step(bit):
-        drive_din(dut, bit)
+    # Drive input safely BEFORE edge, then sample AFTER edge.
+    # We drive at t = (period/2) BEFORE the next rising edge to avoid race.
+    half_period = period_us / 2
+
+    async def step(bit, label=""):
+        # Wait half cycle so we are away from clock edge
+        await Timer(half_period, units="us")
+        set_din_only(dut, bit)
+
+        # Now wait for the rising edge where the FSM samples din
         await RisingEdge(dut.clk)
-        return int(dut.uo_out[0].value)
+
+        z = get_z(dut)
+        st = get_state_dbg(dut)
+        dut._log.info(f"{label} din={bit} -> state={st:02b} z={z}")
+        return z, st
 
     # Stream: 1 0 1 0 1
-    # In this Moore FSM, z becomes 1 *after* the clock edge that transitions into S3_101.
-    # With step() sampling after each edge, detections should appear on the 3rd and 5th samples.
     zs = []
-    zs.append(await step(1))  # after seeing 1   -> 0
-    zs.append(await step(0))  # after seeing 10  -> 0
-    zs.append(await step(1))  # after seeing 101 -> 1 (now in detect state)
-    zs.append(await step(0))  # next            -> 0
-    zs.append(await step(1))  # detect again    -> 1
+    states = []
 
-    assert zs[0] == 0
-    assert zs[1] == 0
-    assert zs[2] == 1
-    assert zs[3] == 0
-    assert zs[4] == 1
+    z, st = await step(1, "b1")
+    zs.append(z); states.append(st)
+
+    z, st = await step(0, "b2")
+    zs.append(z); states.append(st)
+
+    z, st = await step(1, "b3")
+    zs.append(z); states.append(st)
+
+    z, st = await step(0, "b4")
+    zs.append(z); states.append(st)
+
+    z, st = await step(1, "b5")
+    zs.append(z); states.append(st)
+
+    # Expected behavior:
+    # After bits 1,0,1 we should enter S3_101 => z=1 on that sample
+    assert zs[0] == 0, f"After 1 expected z=0, got z={zs[0]}, state={states[0]:02b}"
+    assert zs[1] == 0, f"After 10 expected z=0, got z={zs[1]}, state={states[1]:02b}"
+    assert zs[2] == 1, f"After 101 expected z=1, got z={zs[2]}, state={states[2]:02b}"
+    assert zs[3] == 0, f"After next bit expected z=0, got z={zs[3]}, state={states[3]:02b}"
+    assert zs[4] == 1, f"After 101 again expected z=1, got z={zs[4]}, state={states[4]:02b}"
