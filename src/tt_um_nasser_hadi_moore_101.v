@@ -11,59 +11,70 @@ module tt_um_nasser_hadi_moore_101 (
     input  wire [7:0] uio_in,   // IOs: Input path
     output wire [7:0] uio_out,  // IOs: Output path
     output wire [7:0] uio_oe,   // IOs: Enable path (1=output)
-    input  wire       ena,      // always 1 when powered (can ignore)
+    input  wire       ena,      // always 1 when powered
     input  wire       clk,      // clock
     input  wire       rst_n      // active-low reset
 );
 
-    // --------- Pin mapping ----------
-    wire din = ui_in[0];   // serial input
-    // ui_in[1]..ui_in[7] unused
+    // -------------------------
+    // Input mapping
+    // -------------------------
+    wire din = ui_in[0];
 
-    // --------- Moore FSM states ----------
-    typedef enum logic [1:0] {
-        S0_IDLE = 2'b00,   // no match
-        S1_1    = 2'b01,   // saw "1"
-        S2_10   = 2'b10,   // saw "10"
-        S3_101  = 2'b11    // saw "101"  => output z=1 (Moore)
-    } state_t;
+    // -------------------------
+    // Moore FSM states (iverilog-safe)
+    // -------------------------
+    localparam [1:0] S0_IDLE = 2'b00;
+    localparam [1:0] S1_1    = 2'b01;
+    localparam [1:0] S2_10   = 2'b10;
+    localparam [1:0] S3_101  = 2'b11;
 
-    state_t state, next_state;
+    reg [1:0] state, next_state;
 
-    // Next-state logic (overlap allowed)
+    // -------------------------
+    // Next-state logic
+    // -------------------------
     always @(*) begin
         next_state = state;
         case (state)
-            S0_IDLE: next_state = (din) ? S1_1  : S0_IDLE;
-            S1_1:    next_state = (din) ? S1_1  : S2_10;     // "1" + 0 => "10"
-            S2_10:   next_state = (din) ? S3_101: S0_IDLE;   // "10" + 1 => "101"
-            S3_101:  next_state = (din) ? S1_1  : S2_10;     // overlap handling
+            S0_IDLE: next_state = (din) ? S1_1   : S0_IDLE;
+            S1_1:    next_state = (din) ? S1_1   : S2_10;
+            S2_10:   next_state = (din) ? S3_101 : S0_IDLE;
+            S3_101:  next_state = (din) ? S1_1   : S2_10;
             default: next_state = S0_IDLE;
         endcase
     end
 
-    // State register with async active-low reset
+    // -------------------------
+    // State register
+    // -------------------------
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) state <= S0_IDLE;
-        else        state <= next_state;
+        if (!rst_n)
+            state <= S0_IDLE;
+        else
+            state <= next_state;
     end
 
-    // Moore output (depends only on state)
+    // -------------------------
+    // Moore output logic
+    // -------------------------
     wire z = (state == S3_101);
 
-    // --------- Outputs ----------
+    // -------------------------
+    // Outputs
+    // -------------------------
     assign uo_out[0] = z;
 
-    // (Optional debug) expose state bits:
-    assign uo_out[2:1] = state;   // uo_out[1]=state[0], uo_out[2]=state[1]
+    // Debug: expose state bits (optional)
+    assign uo_out[2:1] = state;
 
-    // Unused outputs tied low
+    // Unused outputs
     assign uo_out[7:3] = 5'b0;
 
     assign uio_out = 8'b0;
     assign uio_oe  = 8'b0;
 
-    // Prevent unused warnings (matches manual style)
+    // Silence unused warnings
     wire _unused = &{ena, ui_in[7:1], uio_in, 1'b0};
 
 endmodule
